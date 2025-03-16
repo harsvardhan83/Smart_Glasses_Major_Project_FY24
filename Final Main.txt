@@ -1,0 +1,207 @@
+import openai
+import speech_recognition as sr
+from gtts import gTTS
+from IPython.display import Audio, display
+import os
+from googletrans import Translator, LANGUAGES
+import board
+import busio
+import digitalio
+import adafruit_ssd1306
+from PIL import Image, ImageDraw, ImageFont
+import time
+import textwrap
+
+# Setups
+openai.api_key = "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"
+i2c = busio.I2C(board.SCL, board.SDA)
+oled = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c)
+font_path_hin = "/home/final/TTF/NotoSansDevanagari-VariableFont_wdth,wght.ttf"
+font_path_kan = "/home/final/TTF/NotoSansKannada-VariableFont_wdth,wght.ttf"
+font_path_tam = "/home/final/TTF/NotoSansTamil-VariableFont_wdth,wght.ttf"
+font_path_tel = "/home/final/TTF/NotoSansTelugu-VariableFont_wdth,wght.ttf"
+font_path_mal = "/home/final/TTF/NotoSansMalayalam-VariableFont_wdth,wght.ttf"
+font_path_urd = "/home/final/TTF/NotoNastaliqUrdu-VariableFont_wght.ttf"
+font_path_mar = "/home/final/TTF/NotoSans-VariableFont_wdth,wght.ttf"
+font_default = ImageFont.truetype(font_path_kan, 16)
+
+def get_font(lang_code):
+    if lang_code == 'hi':
+        return ImageFont.truetype(font_path_hin, 16)
+    elif lang_code == 'kn':
+        return ImageFont.truetype(font_path_kan, 16)
+    elif lang_code == 'ml':
+        return ImageFont.truetype(font_path_mal, 16)
+    elif lang_code == 'ta':
+        return ImageFont.truetype(font_path_tam, 16)
+    elif lang_code == 'te':
+        return ImageFont.truetype(font_path_tel, 16)
+    elif lang_code == 'ur':
+        return ImageFont.truetype(font_path_urd, 16)
+    elif lang_code == 'mr':
+        return ImageFont.truetype(font_path_mar, 16)
+    else:
+        return font_default
+
+def display_startup_message(oled, text, font):
+    oled.fill(0)
+    image = Image.new("1", (oled.width, oled.height))
+    draw = ImageDraw.Draw(image)
+    draw.text((0, 0), text, font=font, fill=255)
+    oled.image(image)
+    oled.show()
+    time.sleep(2)  
+
+def scroll_text(oled, text, font):
+    
+    lines = textwrap.wrap(text, width=oled.width // font.getsize('X')[0])
+    image = Image.new("1", (oled.width, oled.height))
+    draw = ImageDraw.Draw(image)
+    text_height = len(lines) * font.getsize('X')[1]
+    
+    if text_height <= oled.height:
+        draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
+        for i, line in enumerate(lines):
+            draw.text((0, i * font.getsize('X')[1]), line, font=font, fill=255)
+        oled.image(image)
+        oled.show()
+        time.sleep(1)  
+        return
+    
+    draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
+    for i, line in enumerate(lines):
+        draw.text((0, i * font.getsize('X')[1]), line, font=font, fill=255)
+    oled.image(image)
+    oled.show()
+    time.sleep(1)
+
+    y = 0
+    while y < text_height - oled.height:
+        
+        draw.rectangle((0, 0, oled.width, oled.height), outline=0, fill=0)
+        
+        for i, line in enumerate(lines):
+            draw.text((0, i * font.getsize('X')[1] - y), line, font=font, fill=255)
+
+        oled.image(image)
+        oled.show()
+
+        y += 3.5
+        time.sleep(0.05)  
+
+    time.sleep(2)
+
+    oled.fill(0)
+    oled.show()
+
+def ask_openai(prompt):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": "You are a helpful assistant."},
+                      {"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message['content'].strip()
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return None
+
+def recognize_speech_from_mic(phrase_time_limit=5):
+    recognizer = sr.Recognizer()
+    with sr.Microphone(device_index=3) as source:
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        print("Listening...")
+        scroll_text(oled, "Listening...", font_default)
+        audio = recognizer.listen(source, phrase_time_limit=5)
+        try:
+            speech_text = recognizer.recognize_google(audio)
+            scroll_text(oled, speech_text, font_default)
+            print("You said:", speech_text)
+            return speech_text
+        except sr.UnknownValueError:
+            print("Could not understand audio")
+            return None
+        except sr.RequestError as e:
+            print(f"Could not request results from Google Speech Recognition service; {e}")
+            return None
+
+def translate_text(text, dest_language, oled, font):
+    translator = Translator()
+    try:
+        if dest_language not in LANGUAGES:
+            print("Invalid language code. Please say a valid language code.")
+            return
+        translation = translator.translate(text, dest=dest_language)
+        print(f"Original Text: {text}")
+        print(f"Translated Text [{LANGUAGES.get(dest_language, 'Unknown')}]: {translation.text}")
+        scroll_text(oled, translation.text, font)
+    except Exception as e:
+        print(f"An error occurred during translation: {str(e)}")
+
+# Language dictionary
+Lang = {'english': 'en', 'french': 'fr', 'german': 'de','malyalam':'ml', 'hindi': 'hi', 'kannada': 'kn', 'malayalam': 'ml', 'marathi': 'mr', 'spanish': 'es', 'tamil': 'ta', 'telugu': 'te', 'urdu': 'ur'}
+
+state = "default"
+lang_code = None
+
+# Startup message
+display_startup_message(oled, "Welcome! ", font_default)
+
+while True:
+    command = recognize_speech_from_mic(3)
+    if command is None:
+        continue
+    command = command.lower()
+
+    if state == "default":
+        if 'translate' in command or 'translate this to ' in command:
+            state = "translate"
+            scroll_text(oled, "which language",font_default)
+            abc = recognize_speech_from_mic(3)
+            if abc and abc.lower() in Lang:
+                lang_code = Lang[abc.lower()]
+                scroll_text(oled,"trasnslate mode:on", font_default)
+            else:
+                print("Could not understand language.")
+        elif 'ask gpt' in command:
+            state = "ask gpt"
+        else:
+            print(f"Echo: {command}")
+
+    elif state == "translate":
+        if 'exit translate' in command:
+            state = "default"
+            print("Exiting translation mode...")
+        elif 'change language' in command:
+            #new_lang_code = input("Enter new language code: ")
+            scroll_text(oled, "which language",font_default)
+            abc = recognize_speech_from_mic(3)
+            if abc and abc.lower() in Lang:
+                new_lang_code = Lang[abc.lower()]
+                scroll_text(oled,"trasnslate mode:on", font_default)
+            if new_lang_code:
+                lang_code = new_lang_code
+                print(f"Language changed to {lang_code}")
+            else:
+                print("No valid language code entered. Please try again.")
+        elif lang_code:
+            font = get_font(lang_code)
+            translate_text(command, lang_code, oled, font)
+        else:
+            print("No valid language code specified. Please try again.")
+
+
+    elif state == "ask gpt":
+        if 'exit gpt' in command:
+            state = "default"
+            print("Exiting GPT mode...")
+        else:
+            response_text = ask_openai(command)
+            if response_text:
+                font = get_font(lang_code) if lang_code else font_default
+                scroll_text(oled, response_text, font)
+                print("Response:", response_text)
+
+    if 'good night' in command or 'bye' in command:
+        scroll_text(oled, "See you soon :)", font_default)
+        break
